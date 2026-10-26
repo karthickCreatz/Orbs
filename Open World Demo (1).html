@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Open World Demo</title>
+<style>
+:root{--hud-bg:rgba(10,14,24,.55);--hud-fg:#f4f6fb;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{margin:0;height:100%;overflow:hidden;background:#87ceeb;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;touch-action:none}
+canvas{display:block}
+.hud{position:fixed;left:12px;top:calc(12px + env(safe-area-inset-top,0px));background:var(--hud-bg);color:var(--hud-fg);padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;backdrop-filter:blur(6px);pointer-events:none}
+.hud b{font-size:18px}
+.help{position:fixed;right:12px;top:calc(12px + env(safe-area-inset-top,0px));background:var(--hud-bg);color:var(--hud-fg);padding:10px 14px;border-radius:12px;font-size:12px;line-height:1.6;max-width:210px;pointer-events:none}
+#msg{position:fixed;left:50%;bottom:calc(30px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--hud-bg);color:var(--hud-fg);padding:10px 18px;border-radius:999px;font-size:15px;opacity:0;transition:opacity .4s;pointer-events:none;text-align:center}
+#joy{position:fixed;width:110px;height:110px;margin:-55px 0 0 -55px;border-radius:50%;border:2px solid rgba(255,255,255,.5);background:rgba(255,255,255,.12);display:none;pointer-events:none}
+#knob{position:absolute;left:35px;top:35px;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.7)}
+.fbtn{pointer-events:auto;margin-top:6px;margin-right:4px;background:rgba(255,255,255,.18);color:var(--hud-fg);border:1px solid rgba(255,255,255,.35);border-radius:8px;padding:5px 10px;font-size:13px;cursor:pointer}
+.fbtn:active{background:rgba(255,255,255,.35)}
+@media (max-width:600px){.help{display:none}}
+</style>
+</head>
+<body>
+<div class="hud">🌍 Orbs: <b id="orbs">0</b> / 20<br>📍 <span id="pos">0, 0</span> · 🕒 <span id="clock">--</span><br><button class="fbtn" id="faceBtn">📷 My face</button><button class="fbtn" id="faceDel" style="display:none">✖ Remove</button><input type="file" id="faceIn" accept="image/*" style="display:none"></div>
+<div class="help">WASD / arrows: move<br>Shift: sprint · Space: jump<br>Drag mouse: look around<br>Collect all glowing orbs ✨</div>
+<div id="msg"></div>
+<div id="joy"><div id="knob"></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+// ---------- noise & terrain height ----------
+function hash(x,y){var n=Math.sin(x*127.1+y*311.7)*43758.5453;return n-Math.floor(n);}
+function vn(x,y){var xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi,u=xf*xf*(3-2*xf),v=yf*yf*(3-2*yf);
+ return hash(xi,yi)*(1-u)*(1-v)+hash(xi+1,yi)*u*(1-v)+hash(xi,yi+1)*(1-u)*v+hash(xi+1,yi+1)*u*v;}
+function fbm(x,y){var s=0,a=.5,f=1;for(var i=0;i<5;i++){s+=a*vn(x*f,y*f);f*=2;a*=.5;}return s;}
+var SIZE=600;
+function H(x,z){
+ var n=fbm(x*.006,z*.006),m=fbm(x*.002+50,z*.002+50);
+ var h=(n-.45)*60*(.4+m);
+ var d=Math.sqrt(x*x+z*z)/(SIZE/2),t=Math.min(Math.max((d-.7)/.3,0),1);
+ return h-t*t*(3-2*t)*30;
+}
+// ---------- scene ----------
+var renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+document.body.appendChild(renderer.domElement);
+var scene=new THREE.Scene();
+var sky=new THREE.Color(0x87ceeb);
+scene.background=sky;scene.fog=new THREE.Fog(sky,60,260);
+var camera=new THREE.PerspectiveCamera(65,innerWidth/innerHeight,.1,500);
+var hemi=new THREE.HemisphereLight(0xffffff,0x445533,.7);scene.add(hemi);
+var sun=new THREE.DirectionalLight(0xfff2d6,.9);scene.add(sun);
+
+// terrain mesh
+var seg=180,geo=new THREE.PlaneGeometry(SIZE,SIZE,seg,seg);geo.rotateX(-Math.PI/2);
+var p=geo.attributes.position,cols=[];
+for(var i=0;i<p.count;i++){
+ var x=p.getX(i),z=p.getZ(i),h=H(x,z);p.setY(i,h);
+ var c=new THREE.Color(),j=hash(x*.7,z*.7)*.08;
+ if(h<.8)c.setRGB(.82+j,.75+j,.5);
+ else if(h<9)c.setRGB(.25+j,.55+j*2,.2+j);
+ else if(h<15)c.setRGB(.45+j,.42+j,.4+j);
+ else c.setRGB(.95,.95,.98);
+ cols.push(c.r,c.g,c.b);
+}
+geo.setAttribute('color',new THREE.Float32BufferAttribute(cols,3));
+geo.computeVertexNormals();
+scene.add(new THREE.Mesh(geo,new THREE.MeshLambertMaterial({vertexColors:true})));
+
+// water
+var water=new THREE.Mesh(new THREE.PlaneGeometry(SIZE*2,SIZE*2).rotateX(-Math.PI/2),
+ new THREE.MeshLambertMaterial({color:0x2a7fd4,transparent:true,opacity:.75}));
+water.position.y=0;scene.add(water);
+
+// trees (instanced)
+var trunkG=new THREE.CylinderGeometry(.25,.35,2,6),leafG=new THREE.ConeGeometry(1.6,4.5,7);
+var N=1400,trunks=new THREE.InstancedMesh(trunkG,new THREE.MeshLambertMaterial({color:0x6b4423}),N),
+ leaves=new THREE.InstancedMesh(leafG,new THREE.MeshLambertMaterial({color:0x2e7d32}),N),
+ dummy=new THREE.Object3D(),n=0,tries=0;
+while(n<N&&tries<20000){tries++;
+ var x=(Math.random()-.5)*SIZE*.9,z=(Math.random()-.5)*SIZE*.9,h=H(x,z);
+ if(h<1.2||h>11)continue;
+ var s=.8+Math.random()*.9;
+ dummy.position.set(x,h+s,z);dummy.scale.set(s,s,s);dummy.updateMatrix();trunks.setMatrixAt(n,dummy.matrix);
+ dummy.position.set(x,h+s*4,z);dummy.updateMatrix();leaves.setMatrixAt(n,dummy.matrix);n++;
+}
+trunks.count=leaves.count=n;scene.add(trunks);scene.add(leaves);
+
+// player
+var player=new THREE.Group();
+var body=new THREE.Mesh(new THREE.CylinderGeometry(.45,.45,1.1,12),new THREE.MeshLambertMaterial({color:0xe94f37}));body.position.y=.85;
+var head=new THREE.Mesh(new THREE.SphereGeometry(.4,12,12),new THREE.MeshLambertMaterial({color:0xffd6a5}));head.position.y=1.7;
+var nose=new THREE.Mesh(new THREE.BoxGeometry(.2,.15,.3),new THREE.MeshLambertMaterial({color:0x222222}));nose.position.set(0,1.75,.4);
+player.add(body,head,nose);scene.add(player);
+
+// custom face (photo stays on this device)
+var faceMesh=null,faceBtn=document.getElementById('faceBtn'),faceDel=document.getElementById('faceDel'),faceIn=document.getElementById('faceIn');
+function setFace(url,save){
+ var img=new Image();
+ img.onload=function(){
+  var c=document.createElement('canvas');c.width=c.height=192;
+  var x=c.getContext('2d'),s=Math.min(img.width,img.height);
+  x.drawImage(img,(img.width-s)/2,(img.height-s)/2,s,s,0,0,192,192);
+  if(faceMesh)player.remove(faceMesh);
+  faceMesh=new THREE.Mesh(new THREE.CircleGeometry(.37,32),new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(c)}));
+  faceMesh.position.set(0,1.7,.43);player.add(faceMesh);nose.visible=false;faceDel.style.display='inline-block';
+  if(save){try{localStorage.setItem('ow_face',c.toDataURL('image/jpeg',.8));}catch(e){}}
+ };
+ img.src=url;
+}
+faceBtn.addEventListener('click',function(){faceBtn.blur();faceIn.click();});
+faceIn.addEventListener('change',function(){
+ var f=faceIn.files&&faceIn.files[0];if(!f)return;
+ var rd=new FileReader();rd.onload=function(){setFace(rd.result,true);};rd.readAsDataURL(f);faceIn.value='';
+});
+faceDel.addEventListener('click',function(){
+ faceDel.blur();if(faceMesh){player.remove(faceMesh);faceMesh=null;}nose.visible=true;faceDel.style.display='none';
+ try{localStorage.removeItem('ow_face');}catch(e){}
+});
+try{var sv=localStorage.getItem('ow_face');if(sv)setFace(sv,false);}catch(e){}
+
+// spawn on land near centre
+var px=0,pz=0,found=false;
+for(var r=0;r<150&&!found;r+=5)for(var a=0;a<6.28&&!found;a+=.4){
+ var tx=Math.cos(a)*r,tz=Math.sin(a)*r,th=H(tx,tz);
+ if(th>1.2&&th<5){px=tx;pz=tz;found=true;}
+}
+var py=H(px,pz),vy=0,onGround=true,yaw=0,pitch=.35,face=0;
+
+// orbs
+var orbs=[],orbMat=new THREE.MeshBasicMaterial({color:0xffe066}),orbGeo=new THREE.SphereGeometry(.7,16,16);
+tries=0;
+while(orbs.length<20&&tries<5000){tries++;
+ var x=(Math.random()-.5)*SIZE*.8,z=(Math.random()-.5)*SIZE*.8,h=H(x,z);
+ if(h<1)continue;
+ var o=new THREE.Mesh(orbGeo,orbMat);o.position.set(x,h+1.6,z);o.userData.base=h+1.6;
+ var l=new THREE.PointLight(0xffe066,.8,14);o.add(l);
+ scene.add(o);orbs.push(o);
+}
+var got=0,orbEl=document.getElementById('orbs'),msg=document.getElementById('msg');
+function say(t){msg.textContent=t;msg.style.opacity=1;clearTimeout(say.t);say.t=setTimeout(function(){msg.style.opacity=0;},2600);}
+say('Welcome! Find the 20 glowing orbs ✨');
+
+// ---------- input ----------
+var keys={};
+addEventListener('keydown',function(e){keys[e.code]=true;if(e.code==='Space')e.preventDefault();});
+addEventListener('keyup',function(e){keys[e.code]=false;});
+var drag=null,joy=null,joyEl=document.getElementById('joy'),knob=document.getElementById('knob'),jv={x:0,y:0};
+renderer.domElement.addEventListener('pointerdown',function(e){
+ if(e.pointerType==='touch'&&e.clientX<innerWidth/2&&!joy){
+  joy={id:e.pointerId,x:e.clientX,y:e.clientY};joyEl.style.display='block';joyEl.style.left=e.clientX+'px';joyEl.style.top=e.clientY+'px';
+ }else if(!drag){drag={id:e.pointerId,x:e.clientX,y:e.clientY};}
+});
+addEventListener('pointermove',function(e){
+ if(joy&&e.pointerId===joy.id){
+  var dx=e.clientX-joy.x,dy=e.clientY-joy.y,l=Math.hypot(dx,dy),m=45;if(l>m){dx*=m/l;dy*=m/l;}
+  jv.x=dx/m;jv.y=dy/m;knob.style.transform='translate('+dx+'px,'+dy+'px)';
+ }else if(drag&&e.pointerId===drag.id){
+  yaw-=(e.clientX-drag.x)*.006;pitch=Math.min(Math.max(pitch+(e.clientY-drag.y)*.005,-.1),1.2);
+  drag.x=e.clientX;drag.y=e.clientY;
+ }
+});
+function up(e){
+ if(joy&&e.pointerId===joy.id){joy=null;jv.x=jv.y=0;joyEl.style.display='none';knob.style.transform='';}
+ if(drag&&e.pointerId===drag.id)drag=null;
+}
+addEventListener('pointerup',up);addEventListener('pointercancel',up);
+addEventListener('resize',function(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+
+// ---------- loop ----------
+var clock=new THREE.Clock(),tod=1.0,nightC=new THREE.Color(0x0b1020),dayC=new THREE.Color(0x87ceeb),posEl=document.getElementById('pos'),clkEl=document.getElementById('clock');
+function frame(){
+ requestAnimationFrame(frame);
+ var dt=Math.min(clock.getDelta(),.05),T=clock.elapsedTime;
+ // input vector
+ var f=(keys.KeyW||keys.ArrowUp?1:0)-(keys.KeyS||keys.ArrowDown?1:0)-jv.y;
+ var r=(keys.KeyD||keys.ArrowRight?1:0)-(keys.KeyA||keys.ArrowLeft?1:0)+jv.x;
+ var il=Math.hypot(f,r);if(il>1){f/=il;r/=il;}
+ var inWater=py<.3&&H(px,pz)<-.2;
+ var speed=(keys.ShiftLeft||keys.ShiftRight?16:8)*(inWater?.45:1);
+ var mx=(-Math.sin(yaw))*f+Math.cos(yaw)*r,mz=(-Math.cos(yaw))*f-Math.sin(yaw)*r;
+ var nx=px+mx*speed*dt,nz=pz+mz*speed*dt;
+ // block steep slopes and world edge
+ if(Math.hypot(nx,nz)<SIZE/2-8&&H(nx,nz)-H(px,pz)<1.4*speed*dt+.2){px=nx;pz=nz;}
+ if(il>.05)face+=Math.atan2(Math.sin(Math.atan2(mx,mz)-face),Math.cos(Math.atan2(mx,mz)-face))*Math.min(1,dt*12);
+ player.rotation.y=face;
+ // vertical
+ var g=H(px,pz);
+ if((keys.Space)&&onGround){vy=9;onGround=false;}
+ vy-=24*dt;py+=vy*dt;
+ if(py<=g){py=g;vy=0;onGround=true;}else onGround=false;
+ player.position.set(px,py-(inWater?.5:0),pz);
+ // camera
+ var dist=9,cx=px+Math.sin(yaw)*Math.cos(pitch)*dist,cz=pz+Math.cos(yaw)*Math.cos(pitch)*dist,cy=py+2+Math.sin(pitch)*dist;
+ cy=Math.max(cy,H(cx,cz)+1.2);
+ camera.position.set(cx,cy,cz);camera.lookAt(px,py+1.5,pz);
+ // day/night
+ tod+=dt*.03;
+ var s=Math.sin(tod),k=Math.min(Math.max(s*2+.5,0),1);
+ sky.copy(nightC).lerp(dayC,k);scene.fog.color.copy(sky);
+ sun.position.set(px+Math.cos(tod)*100,Math.max(s,.05)*100,pz+30);sun.target.position.set(px,py,pz);sun.intensity=.15+.85*k;hemi.intensity=.2+.5*k;
+ // orbs
+ for(var i=orbs.length-1;i>=0;i--){
+  var o=orbs[i];o.position.y=o.userData.base+Math.sin(T*2+i)*.3;
+  if(Math.hypot(o.position.x-px,o.position.z-pz)<2&&Math.abs(o.position.y-py-1)<3){
+   scene.remove(o);orbs.splice(i,1);got++;orbEl.textContent=got;
+   say(got===20?'🎉 You found every orb! Explore as long as you like.':'Orb collected! '+(20-got)+' left');
+  }
+ }
+ water.position.y=Math.sin(T*.8)*.08;
+ posEl.textContent=Math.round(px)+', '+Math.round(pz);
+ clkEl.textContent=s>0?'Day ☀️':'Night 🌙';
+ renderer.render(scene,camera);
+}
+frame();
+})();
+</script>
+</body>
+</html>
